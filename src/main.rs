@@ -1,12 +1,12 @@
 use clap::{_clap_count_exprs, arg_enum};
+use futures::future::*;
+use futures::prelude::*;
 use futures::{Future, Stream};
-use reqwest::r#async::{Client, Decoder};
+use reqwest::r#async::{Client, Response};
 use reqwest::{Method, Url};
-use std::io::{self, Cursor};
-use std::mem;
+use std::time::{Duration, Instant};
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
-use futures::prelude::*;
 
 arg_enum! {
     #[derive(Debug)]
@@ -84,28 +84,75 @@ struct Config {
     url: Url,
 }
 
-// fn make_reques()
+/// This struct is required to keep track of when work on its respective TimekeepingFuture was
+/// started.
+/// We know work has started when it's polled for the first time.
+/// When that happens, we note the time when it has started processing in order to later compare it
+/// to later times when polling.
+#[derive(Debug)]
+enum PolledState {
+    Unpolled,
+    Polled(std::time::Instant),
+}
 
-fn run_benchmark(config: Config) -> impl Future<Item = (), Error = ()> {
-    Client::new()
-        .request(config.method, config.url)
-        .send()
-        .and_then(|mut res| {
-            println!("{}", res.status());
+/// A timekeeping `Future` that wraps `F`.
+#[derive(Debug)]
+struct TimekeepingFuture<F: Future> {
+    inner: F,
+    state: PolledState,
+}
 
-            let body = mem::replace(res.body_mut(), Decoder::empty());
-            body.concat2()
-        })
-        .map_err(|err| println!("request error: {}", err))
-        .map(|body| {
-            let mut body = Cursor::new(body);
-            let _ = io::copy(&mut body, &mut io::stdout()).map_err(|err| {
-                println!("stdout error: {}", err);
-            });
-        })
+fn timekeeping<F: Future>(future: F) -> TimekeepingFuture<F> {
+    TimekeepingFuture {
+        inner: future,
+        state: PolledState::Unpolled,
+    }
+}
+
+impl<F: Future> Future for TimekeepingFuture<F> {
+    type Item = (Result<F::Item, F::Error>, Duration);
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let t1 = match self.state {
+            PolledState::Unpolled => Instant::now(),
+            PolledState::Polled(t) => t,
+        };
+
+        let duration = Instant::now() - t1;
+
+        match self.inner.poll() {
+            Ok(Async::Ready(value)) => Ok(Async::Ready((Ok(value), duration))),
+            Ok(Async::NotReady) => {
+                self.state = PolledState::Polled(t1);
+                Ok(Async::NotReady)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+fn fetch() -> impl Future<Item = (), Error = ()> {
+    let client = Client::new();
+
+    let output = |mut res: Response| Ok(res.status());
+
+    let mut requests = vec![];
+
+    for i in 1..3 {
+        requests.push(client.get("http://0.0.0.0:8080").send().and_then(output))
+    }
+
+    let f = join_all(requests);
+    f.map(|x| {
+        println!("{:?}", x);
+    })
+    .map_err(|err| {
+        println!("stdout error: {}", err);
+    })
 }
 
 fn main() {
-    let config = Config::from_args();
-    tokio::run(run_benchmark(config));
+    // let config = Config::from_args();
+    tokio::run(fetch());
 }
