@@ -204,5 +204,5 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
 
 fn main() {
     let config = Config::from_args();
-    tokio::run(async_main(config));
+    tokio::run(lazy(|| async_main(config)));
 }
