@@ -1,7 +1,9 @@
+#![recursion_limit = "128"]
+
 use clap::{_clap_count_exprs, arg_enum};
 use futures::future::*;
 use futures::prelude::*;
-use futures::{Future, Stream};
+use futures::{stream, Future};
 use reqwest::r#async::{Client, Response};
 use reqwest::{Method, Url};
 use std::time::{Duration, Instant};
@@ -19,6 +21,11 @@ arg_enum! {
     }
 }
 
+pub fn duration_from_str_secs(d: &str) -> Result<Duration, std::num::ParseIntError> {
+    let secs: u64 = d.parse()?;
+    Ok(Duration::from_secs(secs))
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "overpower",
@@ -28,9 +35,9 @@ arg_enum! {
 struct Config {
     #[structopt(
         short = "c",
-        long = "connections",
-        default_value = "2",
-        help = "Connections to use"
+        long = "concurrency",
+        default_value = "10",
+        help = "Maximum number of concurrent requests"
     )]
     connections: u32,
 
@@ -38,18 +45,18 @@ struct Config {
         short = "D",
         long = "duration",
         default_value = "5",
-        help = "Duration of benchmark in seconds"
+        parse(try_from_str = "duration_from_str_secs"),
+        help = "Duration of the benchmark in seconds"
     )]
-    duration: u32,
+    duration: Duration,
 
-    #[structopt(
-        short = "t",
-        long = "threads",
-        default_value = "2",
-        help = "Number of threads to use"
-    )]
-    threads: u16,
-
+    // #[structopt(
+    //     short = "t",
+    //     long = "threads",
+    //     default_value = "2",
+    //     help = "Number of threads to use"
+    // )]
+    // threads: u16,
     #[structopt(
         short = "H",
         long = "header",
@@ -61,7 +68,7 @@ struct Config {
         short = "r",
         long = "rate",
         default_value = "0",
-        help = "Requests per second to send, 0 means as fast as possible"
+        help = "Number of new requests to spawn per second, 0 means as fast as possible"
     )]
     rate: u32,
 
@@ -132,27 +139,70 @@ impl<F: Future> Future for TimekeepingFuture<F> {
     }
 }
 
-fn fetch() -> impl Future<Item = (), Error = ()> {
+// fn keep_spawning_requests() -> impl Future<Item = (), Error = ()> {}
+
+fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
     let client = Client::new();
 
-    let output = |mut res: Response| Ok(res.status());
+    // let output = |res: Response| Ok(res.status());
 
-    let mut requests = vec![];
+    // let mut requests = vec![];
 
-    for i in 1..3 {
-        requests.push(client.get("http://0.0.0.0:8080").send().and_then(output))
-    }
+    let start_time = Instant::now();
 
-    let f = join_all(requests);
-    f.map(|x| {
-        println!("{:?}", x);
-    })
-    .map_err(|err| {
-        println!("stdout error: {}", err);
-    })
+    let loop_till_done = loop_fn(vec![], move |mut requests| {
+        let done = Instant::now() - start_time >= config.duration;
+
+        if done {
+            Ok(Loop::Break(requests))
+        } else {
+            let fut = timekeeping(client.get(config.url.clone()).send());
+            tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
+            requests.push("lol");
+
+            Ok(Loop::Continue(requests))
+        }
+    });
+
+    loop_till_done.map(|_| ())
+
+    // loop_till_done.map(|x| {
+    //     println!("{:?}", x);
+    //     // for thing in x {
+    //         // println!("{:?}", thing.state);
+    //     // }
+    // })
+
+    // .map_err(|err| {
+    //     println!("stdout error: {}", err);
+    // })
+
+    // for _ in 0..10 {
+    //     requests.push(timekeeping(
+    //         client.get(config.url.clone()).send().and_then(output),
+    //     ))
+    // }
+
+    // let f = join_all(requests);
+    // f.map(|x| {
+    //     println!("{:?}", x);
+    // })
+    // .map_err(|err| {
+    //     println!("stdout error: {}", err);
+    // })
+    // let f = select_all(requests);
+    // f.map(|x| {
+    //     println!("{:?}", x.0);
+    // })
+    // .map_err(|err| {
+    //     // println!("stdout error: {}", err);
+    // })
 }
 
+// fn fetch() -> impl Future<Item = (), Error = ()> {
+// }
+
 fn main() {
-    // let config = Config::from_args();
-    tokio::run(fetch());
+    let config = Config::from_args();
+    tokio::run(async_main(config));
 }
