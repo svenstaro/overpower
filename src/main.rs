@@ -9,6 +9,8 @@ use reqwest::{Method, Url};
 use std::time::{Duration, Instant};
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
+use tokio::runtime::Builder;
+use lazy_static::lazy_static;
 
 arg_enum! {
     #[derive(Debug)]
@@ -24,6 +26,10 @@ arg_enum! {
 pub fn duration_from_str_secs(d: &str) -> Result<Duration, std::num::ParseIntError> {
     let secs: u64 = d.parse()?;
     Ok(Duration::from_secs(secs))
+}
+
+lazy_static! {
+    static ref NUM_CPUS: String = num_cpus::get().to_string();
 }
 
 #[derive(StructOpt, Debug)]
@@ -50,13 +56,14 @@ struct Config {
     )]
     duration: Duration,
 
-    // #[structopt(
-    //     short = "t",
-    //     long = "threads",
-    //     default_value = "2",
-    //     help = "Number of threads to use"
-    // )]
-    // threads: u16,
+    #[structopt(
+        short = "t",
+        long = "threads",
+        raw(default_value = r#"&NUM_CPUS"#),
+        help = "Number of threads to use"
+    )]
+    threads: usize,
+
     #[structopt(
         short = "H",
         long = "header",
@@ -157,21 +164,21 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
             Ok(Loop::Break(requests))
         } else {
             let fut = timekeeping(client.get(config.url.clone()).send());
-            tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
-            requests.push("lol");
+            let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
+            requests.push(lol);
 
             Ok(Loop::Continue(requests))
         }
     });
 
-    loop_till_done.map(|_| ())
+    // loop_till_done.map(|_| ())
 
-    // loop_till_done.map(|x| {
-    //     println!("{:?}", x);
-    //     // for thing in x {
-    //         // println!("{:?}", thing.state);
-    //     // }
-    // })
+    loop_till_done.map(|x| {
+        println!("{:?}", x);
+        // for thing in x {
+            // println!("{:?}", thing.state);
+        // }
+    })
 
     // .map_err(|err| {
     //     println!("stdout error: {}", err);
@@ -204,5 +211,14 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
 
 fn main() {
     let config = Config::from_args();
-    tokio::run(lazy(|| async_main(config)));
+
+    let mut entered = tokio_executor::enter().expect("nested tokio::run");
+    let mut runtime = Builder::new()
+        .core_threads(config.threads)
+        .build()
+        .expect("Couldn't create tokio runtime");
+    runtime.spawn(lazy(|| async_main(config)));
+    entered
+        .block_on(runtime.shutdown_on_idle())
+        .expect("shutdown cannot error")
 }
