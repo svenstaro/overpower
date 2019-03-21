@@ -1,16 +1,17 @@
 #![recursion_limit = "128"]
+#![feature(duration_float)]
 
 use clap::{_clap_count_exprs, arg_enum};
 use futures::future::*;
 use futures::prelude::*;
 use futures::{stream, Future};
+use lazy_static::lazy_static;
 use reqwest::r#async::{Client, Response};
 use reqwest::{Method, Url};
 use std::time::{Duration, Instant};
 use structopt::clap::AppSettings;
 use structopt::StructOpt;
 use tokio::runtime::Builder;
-use lazy_static::lazy_static;
 
 arg_enum! {
     #[derive(Debug)]
@@ -39,14 +40,13 @@ lazy_static! {
     raw(global_settings = "&[AppSettings::ColoredHelp]")
 )]
 struct Config {
-    #[structopt(
-        short = "c",
-        long = "concurrency",
-        default_value = "10",
-        help = "Maximum number of concurrent requests"
-    )]
-    connections: u32,
-
+    // #[structopt(
+    //     short = "c",
+    //     long = "concurrency",
+    //     default_value = "10",
+    //     help = "Maximum number of concurrent requests"
+    // )]
+    // connections: u32,
     #[structopt(
         short = "D",
         long = "duration",
@@ -157,15 +157,46 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
 
     let start_time = Instant::now();
 
+    // Keep track of all request start times so that can achieve constant thoughput request
+    // spawning.
+    // This is used as a sliding window since the spawn rate spreads the given number over a
+    // second.
+    // It's a queue: The oldest requests are near the start of the Vec while the recent ones are
+    // near the end.
+    let mut request_start_times = vec![];
+
     let loop_till_done = loop_fn(vec![], move |mut requests| {
-        let done = Instant::now() - start_time >= config.duration;
+        let now = Instant::now();
+        let done = now - start_time >= config.duration;
 
         if done {
             Ok(Loop::Break(requests))
         } else {
+            let num_requests_started_within_last_second = request_start_times
+                .iter()
+                .filter(|&&x| x < now - Duration::from_secs(1))
+                .count();
+
             let fut = timekeeping(client.get(config.url.clone()).send());
-            let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
-            requests.push(lol);
+
+            if config.rate > 0 {
+                if let Some(last_request_start_time) = request_start_times.last() {
+                    let time_between_requests = Duration::from_float_secs(1.0 / config.rate as f64);
+                    if now - *last_request_start_time > time_between_requests {
+                        let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
+                        request_start_times.push(now);
+                        requests.push(lol);
+                    }
+                } else {
+                    let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
+                    request_start_times.push(now);
+                    requests.push(lol);
+                }
+            } else {
+                let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
+                request_start_times.push(now);
+                requests.push(lol);
+            }
 
             Ok(Loop::Continue(requests))
         }
@@ -176,7 +207,7 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
     loop_till_done.map(|x| {
         println!("{:?}", x);
         // for thing in x {
-            // println!("{:?}", thing.state);
+        // println!("{:?}", thing.state);
         // }
     })
 
