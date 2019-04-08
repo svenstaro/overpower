@@ -5,7 +5,7 @@ authors = ["Sven-Hendrik Haase <svenstaro@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-clap = "2.32"
+clap = "2.33"
 reqwest = "0.9"
 structopt = "0.2"
 tokio = "0.1"
