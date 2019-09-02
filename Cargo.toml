@@ -7,7 +7,7 @@ edition = "2018"
 [dependencies]
 clap = "2.33"
 reqwest = "0.9"
-structopt = "0.2"
+structopt = "0.3"
 tokio = "0.1"
 tokio-executor = "0.1"
 futures = "0.1"
