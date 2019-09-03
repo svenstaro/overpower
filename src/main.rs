@@ -1,12 +1,9 @@
-#![recursion_limit = "128"]
-#![feature(duration_float)]
-
-use clap::{_clap_count_exprs, arg_enum};
+use clap::arg_enum;
 use futures::future::*;
 use futures::prelude::*;
-use futures::{stream, Future};
+use futures::Future;
 use lazy_static::lazy_static;
-use reqwest::r#async::{Client, Response};
+use reqwest::r#async::Client;
 use reqwest::{Method, Url};
 use std::time::{Duration, Instant};
 use structopt::clap::AppSettings;
@@ -36,8 +33,9 @@ lazy_static! {
 #[derive(StructOpt, Debug)]
 #[structopt(
     name = "overpower",
-    about = "CLI tool to benchmark web servers with nice output",
-    raw(global_settings = "&[AppSettings::ColoredHelp]")
+    author,
+    about,
+    global_settings = &[AppSettings::ColoredHelp],
 )]
 struct Config {
     // #[structopt(
@@ -47,50 +45,41 @@ struct Config {
     //     help = "Maximum number of concurrent requests"
     // )]
     // connections: u32,
+    /// Duration of the benchmark in seconds
     #[structopt(
         short = "D",
         long = "duration",
         default_value = "5",
-        parse(try_from_str = "duration_from_str_secs"),
-        help = "Duration of the benchmark in seconds"
+        parse(try_from_str = duration_from_str_secs),
     )]
     duration: Duration,
 
+    /// Number of threads to use
     #[structopt(
         short = "t",
         long = "threads",
-        raw(default_value = r#"&NUM_CPUS"#),
-        help = "Number of threads to use"
+        default_value = &NUM_CPUS,
     )]
     threads: usize,
 
-    #[structopt(
-        short = "H",
-        long = "header",
-        help = "Add header to requests, can be passed multiple times"
-    )]
+    /// Add header to requests, can be passed multiple times
+    #[structopt(short = "H", long = "header")]
     header: Vec<String>,
 
-    #[structopt(
-        short = "r",
-        long = "rate",
-        default_value = "0",
-        help = "Number of new requests to spawn per second, 0 means as fast as possible"
-    )]
+    /// Number of new requests to spawn per second, 0 means as fast as possible
+    #[structopt(short = "r", long = "rate", default_value = "0")]
     rate: u32,
 
     #[structopt(short = "d", long = "data", help = "Sends the specified data")]
     data: Option<String>,
 
+    /// Use a custom request method
     #[structopt(
         short = "X",
         long = "request",
         default_value = "GET",
-        raw(
-            possible_values = "&HttpMethods::variants()",
-            case_insensitive = "true"
-        ),
-        help = "Use a custom request method"
+        possible_values = &HttpMethods::variants(),
+        case_insensitive = true,
     )]
     method: Method,
 
@@ -181,7 +170,7 @@ fn async_main(config: Config) -> impl Future<Item = (), Error = ()> {
 
             if config.rate > 0 {
                 if let Some(last_request_start_time) = request_start_times.last() {
-                    let time_between_requests = Duration::from_float_secs(1.0 / config.rate as f64);
+                    let time_between_requests = Duration::from_secs_f64(1.0 / config.rate as f64);
                     if now - *last_request_start_time > time_between_requests {
                         let lol = tokio::spawn(fut.map(|_| ()).map_err(|_| ()));
                         request_start_times.push(now);
